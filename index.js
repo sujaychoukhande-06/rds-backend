@@ -29,10 +29,15 @@ async function extractPdfText(base64) {
 const app = express();
 
 // ─── MIDDLEWARE ───────────────────────────────────────────
+const cors = require("cors");
+
 app.use(cors({
-  origin: ["http://localhost:3000", "http://localhost:3001"],
-  methods: ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
-  allowedHeaders: ["Content-Type", "Authorization"]
+  origin: [
+    "http://localhost:3000",
+    "https://rds-frontend-iweakmdr2-sujaychoukhande-06s-projects.vercel.app"
+  ],
+  methods: ["GET", "POST", "PUT", "DELETE"],
+  allowedHeaders: ["Content-Type"]
 }));
 app.use(express.json({ limit: "50mb" }));
 app.use(express.urlencoded({ extended: true }));
