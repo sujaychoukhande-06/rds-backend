@@ -29,8 +29,6 @@ async function extractPdfText(base64) {
 const app = express();
 
 // ─── MIDDLEWARE ───────────────────────────────────────────
-const cors = require("cors");
-
 app.use(cors({
   origin: [
     "http://localhost:3000",
