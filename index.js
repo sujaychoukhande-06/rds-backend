@@ -712,18 +712,47 @@ function extractRoomImageFromZip(zipBuffer) {
       const area = width * height;
 
       // Skip images that are almost certainly logos/icons
-      if (width > 0 && height > 0) {
-        // Very small in both dimensions AND small file size → logo/icon
-        if (width < 100 && height < 100 && fileSizeKB < 15) continue;
-        // Extremely wide banner (aspect > 3.5) → likely a logo strip
-        if (width / height > 3.5 || height / width > 3.5) continue;
-      } else {
-        // No dimensions; rely on file size
-        if (fileSizeKB < 15) continue;
-      }
+      // ❌ STRICT LOGO REJECTION
+if (width > 0 && height > 0) {
+  const aspect = width / height;
+
+  // 1. Very small images → reject
+  if (width < 150 && height < 150) continue;
+
+  // 2. Very wide or tall (logos/banners)
+  if (aspect > 3 || aspect < 0.3) continue;
+
+  // 3. Small area → reject
+  if (width * height < 50000) continue;
+} else {
+  // fallback using size
+  if (fileSizeKB < 20) continue;
+}
 
       // Base score: file size (heavier = more detail)
-      let score = fileSizeKB * 8;
+      let score = 0;
+
+// Strong priority to size
+score += fileSizeKB * 10;
+
+// Strong priority to resolution
+if (width && height) {
+  score += (width * height) / 1000;
+}
+
+// Prefer medium aspect ratio (room plans)
+if (width && height) {
+  const aspect = width / height;
+  if (aspect >= 0.7 && aspect <= 1.8) score += 200;
+}
+
+// Penalize early images (logos usually image1/image2)
+const match = entry.entryName.match(/image(\d+)/i);
+if (match) {
+  const num = parseInt(match[1], 10);
+  if (num <= 2) score -= 200;
+  else score += 100;
+}
 
       // Bonus for larger area
       if (area > 0) {
