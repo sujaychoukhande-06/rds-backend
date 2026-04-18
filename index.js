@@ -674,119 +674,116 @@ Rules:
 - Pay special attention to "roomFunction" which is typically at the top of the document
 - Return ONLY the JSON object, no markdown, no explanation`;
 
-// Helper to extract first image from a zip buffer (DOCX/XLSX)
-// Helper: extract the most suitable image (room layout) from a zip buffer (DOCX/XLSX)
-// Helper: extract the most suitable image (room layout) from a zip buffer (DOCX/XLSX)
-// Helper: extract the most suitable image (room layout) from a zip buffer (DOCX/XLSX)
+// Helper: extract room layout image from DOCX zip buffer.
+// KEY FIX: Parse DOCX XML relationships to identify which images are used in
+// headers/footers (logos, branding) vs the document body (floor plans).
+// Header/footer images are EXCLUDED; only body images are considered.
 function extractRoomImageFromZip(zipBuffer) {
   try {
-    const zip = new AdmZip(zipBuffer);
+    const zip     = new AdmZip(zipBuffer);
     const entries = zip.getEntries();
 
-    // Find all image entries in standard media folders
+    // ── Step 1: Find image filenames referenced in headers/footers ──────────
+    // DOCX stores relationships in word/_rels/*.xml.rels
+    // header1.xml.rels, header2.xml.rels, footer*.xml.rels → logo/branding images
+    // document.xml.rels → body images (floor plans, diagrams)
+    const headerImageNames = new Set(); // basenames like "image1.png"
+
+    entries.forEach(e => {
+      const name = e.entryName;
+      // Match header and footer relationship files
+      if (/word\/_rels\/(header|footer)\d*\.xml\.rels$/i.test(name)) {
+        try {
+          const xml = e.getData().toString("utf8");
+          // Extract Target filenames: Target="../media/image3.png"
+          const matches = xml.matchAll(/Target="\.\.\/media\/([^"]+)"/gi);
+          for (const m of matches) {
+            headerImageNames.add(m[1].toLowerCase()); // e.g. "image1.png"
+          }
+        } catch (_) {}
+      }
+    });
+
+    console.log(`Header/footer images (excluded): ${[...headerImageNames].join(", ") || "none"}`);
+
+    // ── Step 2: Get all media images ──────────────────────────────────────
     const imageEntries = entries.filter(e =>
       !e.isDirectory &&
       (e.entryName.includes("word/media/") || e.entryName.includes("xl/media/")) &&
-      /\.(png|jpe?g|gif|bmp|tiff?|webp)$/i.test(e.entryName)
+      /\.(png|jpe?g|gif|bmp|webp)$/i.test(e.entryName)
     );
 
     if (imageEntries.length === 0) return null;
 
+    // ── Step 3: Score each image ──────────────────────────────────────────
     let bestImage = null;
-    let bestScore = -1;
-    const candidates = [];
+    let bestScore  = -Infinity;
 
     for (const entry of imageEntries) {
-      const imgData = entry.getData();
+      const basename = path.basename(entry.entryName).toLowerCase();
+
+      // ❌ HARD EXCLUDE: images from headers/footers (logos, branding)
+      if (headerImageNames.has(basename)) {
+        console.log(`  SKIP (header/footer image): ${entry.entryName}`);
+        continue;
+      }
+
+      const imgData    = entry.getData();
       const fileSizeKB = imgData.length / 1024;
 
       let width = 0, height = 0;
       try {
-        const dimensions = sizeOf(imgData);
-        width = dimensions.width || 0;
-        height = dimensions.height || 0;
-      } catch (e) {
-        // if dimensions can't be read, skip or rely on file size only
-      }
+        const dim = sizeOf(imgData);
+        width  = dim.width  || 0;
+        height = dim.height || 0;
+      } catch (_) {}
 
-      const area = width * height;
-
-      // Skip images that are almost certainly logos/icons
+      // ❌ Reject tiny images (icons, bullets, decorations)
       if (width > 0 && height > 0) {
-         const aspect = width / height;
+        if (width < 150 || height < 150)      { console.log(`  SKIP (too small ${width}x${height}): ${basename}`); continue; }
+        if (width * height < 50000)            { console.log(`  SKIP (small area): ${basename}`); continue; }
+        const asp = width / height;
+        // Very wide (banners) or very tall (sidebars) → not a floor plan
+        if (asp > 3.0 || asp < 0.33)          { console.log(`  SKIP (bad aspect ${asp.toFixed(2)}): ${basename}`); continue; }
+      }
+      if (fileSizeKB < 10)                     { console.log(`  SKIP (tiny file ${fileSizeKB.toFixed(1)}KB): ${basename}`); continue; }
 
-  // ❌ Reject small images (logos)
-         if (width < 200 && height < 200) continue;
-
-  // ❌ Reject banner logos
-         if (aspect > 2.5 || aspect < 0.4) continue;
-
-  // ❌ Reject small area
-         if (width * height < 80000) continue;
-
-  // ❌ Reject too tiny file size
-         if (fileSizeKB < 30) continue;
-      }  else {
-         if (fileSizeKB < 30) continue;
-}
-
-      // Base score: file size (heavier = more detail)
-      let score = fileSizeKB * 8;
-
-      // Bonus for larger area
-      if (area > 0) {
-        score += Math.sqrt(area) / 5;
-        // Bonus for near‑square aspect (room plans usually 0.7–1.5)
-        const aspect = width / height;
-        if (aspect >= 0.7 && aspect <= 1.5) score += 30;
+      // Score: prefer larger, heavier, squarish images
+      let score = fileSizeKB * 10;
+      if (width > 0 && height > 0) {
+        score += Math.sqrt(width * height) / 4;
+        const asp = width / height;
+        // Floor plans are typically squarish (0.6 – 1.6 ratio)
+        if (asp >= 0.6 && asp <= 1.6) score += 50;
       }
 
-      // 🎯 Strong bonus for higher image numbers (logos are often image1, image2)
-      const imageMatch = entry.entryName.match(/image(\d+)/i);
-
-      if (imageMatch) {
-         const num = parseInt(imageMatch[1], 10);
-
-         if (num <= 2) score -= 200;
-         else if (num === 3) score += 100;
-         else score += 80;
-      }
-
-      candidates.push({ entry, width, height, fileSizeKB, score });
+      console.log(`  CANDIDATE: ${entry.entryName} ${width}x${height}px ${fileSizeKB.toFixed(1)}KB score=${score.toFixed(0)}`);
 
       if (score > bestScore) {
-        bestScore = score;
-        bestImage = { data: imgData, entryName: entry.entryName };
+        bestScore  = score;
+        bestImage  = { data: imgData, entryName: entry.entryName };
       }
     }
 
-    // Log all candidates for debugging
-    console.log(`Found ${candidates.length} candidate images:`);
-    candidates.sort((a, b) => b.score - a.score).forEach(c => {
-      console.log(`  - ${c.entry.entryName}: ${c.width}x${c.height} px, ${c.fileSizeKB.toFixed(1)} KB, score=${c.score.toFixed(0)}`);
-    });
-
-    // Fallback: if nothing passed, pick largest file size
-    if (!bestImage && imageEntries.length > 0) {
-      console.log("No image passed filters, using largest file size as fallback");
-      let largest = { size: 0 };
+    // ── Step 4: Fallback — if ALL body images were filtered, pick largest body image ──
+    if (!bestImage) {
+      console.log("No body image passed size filters — using largest non-header image as fallback");
       for (const entry of imageEntries) {
+        const basename = path.basename(entry.entryName).toLowerCase();
+        if (headerImageNames.has(basename)) continue; // still skip header images
         const data = entry.getData();
-        if (data.length > largest.size) {
-          largest = { size: data.length, data, entryName: entry.entryName };
+        if (!bestImage || data.length > bestImage.data.length) {
+          bestImage = { data, entryName: entry.entryName };
         }
-      }
-      if (largest.data) {
-        bestImage = { data: largest.data, entryName: largest.entryName };
       }
     }
 
     if (bestImage) {
-      const ext = path.extname(bestImage.entryName).toLowerCase();
-      const mime = ext === ".png" ? "image/png" :
-                   ext === ".jpg" || ext === ".jpeg" ? "image/jpeg" :
-                   ext === ".gif" ? "image/gif" : "image/png";
-      console.log(`✅ Selected room image: ${bestImage.entryName} (${(bestImage.data.length/1024).toFixed(1)} KB)`);
+      const ext  = path.extname(bestImage.entryName).toLowerCase();
+      const mime = ext === ".png" ? "image/png"
+                 : (ext === ".jpg" || ext === ".jpeg") ? "image/jpeg"
+                 : ext === ".gif" ? "image/gif" : "image/png";
+      console.log(`✅ Room image selected: ${bestImage.entryName} (${(bestImage.data.length/1024).toFixed(1)} KB)`);
       return `data:${mime};base64,${bestImage.data.toString("base64")}`;
     }
   } catch (e) {
