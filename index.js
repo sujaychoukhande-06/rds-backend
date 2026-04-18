@@ -30,10 +30,7 @@ const app = express();
 
 // ─── MIDDLEWARE ───────────────────────────────────────────
 app.use(cors({
-  origin: [
-    "http://localhost:3000",
-    "https://rds-frontend-iweakmdr2-sujaychoukhande-06s-projects.vercel.app"
-  ],
+  origin : "*"
   methods: ["GET", "POST", "PUT", "DELETE"],
   allowedHeaders: ["Content-Type"]
 }));
