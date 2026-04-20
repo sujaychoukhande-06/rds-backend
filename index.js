@@ -680,53 +680,59 @@ Rules:
 - Return ONLY the JSON object, no markdown, no explanation`;
 
 // Extract room layout image from DOCX/XLSX zip buffer.
+// Proven analysis of Adani RDS docs:
+//   image1.png = CPG logo (9KB, 174x128) — in first table row
+//   image2.png = Adani logo (50KB, 1200x731) — in first table row  ← was beating room image
+//   image3.png = room drawing — in second/third table row
+//
 // THREE-LAYER BLOCKING:
-//   Layer 1 — word/_rels/header*.xml.rels & footer*.xml.rels (Word header/footer images)
-//   Layer 2 — first <w:tr> in document.xml (the banner/logo row in body tables)
-//   Layer 3 — size/aspect heuristics (wide+small = logo)
+//   Layer 1: word/_rels/header*.xml.rels + footer*.xml.rels
+//   Layer 2: images referenced in the FIRST <w:tr> of document.xml  ← KEY FIX
+//   Layer 3: size/aspect heuristics for any remaining logos
 function extractRoomImageFromZip(zipBuffer) {
   try {
     const zip     = new AdmZip(zipBuffer);
     const entries = zip.getEntries();
 
-    // ── Layer 1: header/footer relationship files ─────────────────────────
-    const headerImageNames = new Set();
+    // ── Layer 1: Word header/footer section images ───────────────────────
+    const blockedImages = new Set();
     entries.forEach(e => {
       if (/word\/_rels\/(header|footer)\d*\.xml\.rels$/i.test(e.entryName)) {
         try {
           const xml = e.getData().toString("utf8");
-          [...xml.matchAll(/Target="\.\.\/media\/([^"]+)"/gi)]
-            .forEach(m => headerImageNames.add(m[1].toLowerCase()));
+          [...xml.matchAll(/Target="[^"]*media\/([^"]+)"/gi)]
+            .forEach(m => blockedImages.add(path.basename(m[1]).toLowerCase()));
         } catch (_) {}
       }
     });
 
-    // ── Layer 2: images in the FIRST TABLE ROW of document.xml ───────────
-    // In Adani RDS docs the banner row (logos) is the first <w:tr>
-    const firstRowImageFiles = new Set();
+    // ── Layer 2: First table row of document body (banner/logo row) ──────
     const docRelsEntry = entries.find(e => e.entryName === "word/_rels/document.xml.rels");
     const docXmlEntry  = entries.find(e => e.entryName === "word/document.xml");
 
     if (docRelsEntry && docXmlEntry) {
       try {
-        // Build rId → basename map from document.xml.rels
-        const relsXml  = docRelsEntry.getData().toString("utf8");
+        // Build rId → image filename map
+        // IMPORTANT: Target can be "media/img.png" OR "../media/img.png" — handle both
+        const relsXml   = docRelsEntry.getData().toString("utf8");
         const rIdToFile = {};
-        [...relsXml.matchAll(/Id="([^"]+)"[^>]*Target="\.\.\/media\/([^"]+)"/gi)]
+        [...relsXml.matchAll(/Id="([^"]+)"[^>]*Target="[^"]*media\/([^"]+)"/gi)]
           .forEach(m => { rIdToFile[m[1]] = path.basename(m[2]).toLowerCase(); });
 
-        // Find all images referenced inside the first <w:tr>...</w:tr>
-        const docXml       = docXmlEntry.getData().toString("utf8");
-        const firstRowMatch = docXml.match(/<w:tr[ >][\s\S]*?<\/w:tr>/);
-        if (firstRowMatch) {
-          [...firstRowMatch[0].matchAll(/r:embed="([^"]+)"/gi)]
-            .forEach(m => { if (rIdToFile[m[1]]) firstRowImageFiles.add(rIdToFile[m[1]]); });
+        // Get every <w:tr>...</w:tr> block in document order
+        const docXml = docXmlEntry.getData().toString("utf8");
+        const allRows = [...docXml.matchAll(/<w:tr[ >][\s\S]*?<\/w:tr>/g)];
+
+        // Block images found in the FIRST table row (always the banner/logo row)
+        if (allRows.length > 0) {
+          const firstRow = allRows[0][0];
+          [...firstRow.matchAll(/r:embed="([^"]+)"/gi)]
+            .forEach(m => { if (rIdToFile[m[1]]) blockedImages.add(rIdToFile[m[1]]); });
         }
       } catch (_) {}
     }
 
-    console.log(`[img] Blocked header/footer: ${[...headerImageNames].join(", ") || "none"}`);
-    console.log(`[img] Blocked first-row:     ${[...firstRowImageFiles].join(", ") || "none"}`);
+    console.log(`[img] Blocked images: ${[...blockedImages].join(", ") || "none"}`);
 
     // ── Collect all media images ──────────────────────────────────────────
     const imageEntries = entries.filter(e =>
@@ -736,54 +742,53 @@ function extractRoomImageFromZip(zipBuffer) {
     );
     if (imageEntries.length === 0) return null;
 
-    // ── Score remaining body images ───────────────────────────────────────
+    // ── Score remaining (non-blocked) images ─────────────────────────────
     let bestImage = null;
     let bestScore = -Infinity;
 
     for (const entry of imageEntries) {
       const basename = path.basename(entry.entryName).toLowerCase();
 
-      if (headerImageNames.has(basename))  { console.log(`[img] SKIP header/footer: ${basename}`); continue; }
-      if (firstRowImageFiles.has(basename)){ console.log(`[img] SKIP first-row logo: ${basename}`); continue; }
+      if (blockedImages.has(basename)) {
+        console.log(`[img] SKIP blocked: ${basename}`);
+        continue;
+      }
 
       const imgData    = entry.getData();
       const fileSizeKB = imgData.length / 1024;
       let width = 0, height = 0;
       try { const d = sizeOf(imgData); width = d.width || 0; height = d.height || 0; } catch (_) {}
 
-      // Layer 3: size/shape heuristics
-      if (fileSizeKB < 5) { console.log(`[img] SKIP tiny file ${fileSizeKB.toFixed(1)}KB: ${basename}`); continue; }
+      // Layer 3: heuristic filters for any remaining logos
+      if (fileSizeKB < 3) { console.log(`[img] SKIP tiny file: ${basename}`); continue; }
       if (width > 0 && height > 0) {
+        if (width < 80 || height < 80)    { console.log(`[img] SKIP tiny px: ${basename}`); continue; }
+        if (width * height < 20000)        { console.log(`[img] SKIP small area: ${basename}`); continue; }
         const asp = width / height;
-        if (width < 100 || height < 100)           { console.log(`[img] SKIP tiny px: ${basename}`); continue; }
-        if (width * height < 30000)                 { console.log(`[img] SKIP small area: ${basename}`); continue; }
-        if (asp > 4.0 || asp < 0.25)               { console.log(`[img] SKIP extreme aspect ${asp.toFixed(2)}: ${basename}`); continue; }
-        // Wide + small file = logo (e.g. "adani" text logo ~200KB but wide)
-        if (asp > 2.2 && fileSizeKB < 200)          { console.log(`[img] SKIP wide+light logo: ${basename}`); continue; }
+        if (asp > 5.0 || asp < 0.2)       { console.log(`[img] SKIP extreme aspect: ${basename}`); continue; }
       }
 
-      // Score: bigger file + larger area + squarish = floor plan drawing
+      // Score: file size + pixel area + squarish bonus
       let score = fileSizeKB * 10;
       if (width > 0 && height > 0) {
         score += Math.sqrt(width * height) / 4;
         const asp = width / height;
-        if (asp >= 0.5 && asp <= 2.0) score += 60;
+        if (asp >= 0.4 && asp <= 2.5) score += 60;
       }
 
-      console.log(`[img] CANDIDATE: ${entry.entryName} ${width}x${height} ${fileSizeKB.toFixed(1)}KB score=${score.toFixed(0)}`);
+      console.log(`[img] CANDIDATE: ${basename} ${width}x${height} ${fileSizeKB.toFixed(1)}KB score=${score.toFixed(0)}`);
       if (score > bestScore) { bestScore = score; bestImage = { data: imgData, entryName: entry.entryName }; }
     }
 
-    // ── Fallback: largest non-blocked image ───────────────────────────────
+    // ── Fallback: any non-blocked image ──────────────────────────────────
     if (!bestImage) {
-      console.log("[img] Filters eliminated all — using largest non-blocked image");
+      console.log("[img] All filtered — picking largest non-blocked image");
       for (const entry of imageEntries) {
         const basename = path.basename(entry.entryName).toLowerCase();
-        if (headerImageNames.has(basename) || firstRowImageFiles.has(basename)) continue;
+        if (blockedImages.has(basename)) continue;
         const data = entry.getData();
-        if (!bestImage || data.length > bestImage.data.length) {
+        if (!bestImage || data.length > bestImage.data.length)
           bestImage = { data, entryName: entry.entryName };
-        }
       }
     }
 
@@ -870,12 +875,7 @@ app.post("/extract", async (req, res) => {
       model: "llama-3.3-70b-versatile", max_tokens: 1500, temperature: 0,
       messages: [
         { role: "system", content: SYSTEM_PROMPT },
-        { role: "user",   content: `Extract all Room Data Sheet fields from this document. 
-
-CRITICAL INSTRUCTION FOR roomFunction: The "Room Function" section lists what the room is used for, usually as bullet points near the top of the document. Extract the COMPLETE text of every single bullet point/line in that section — do not truncate, summarize or skip any lines. Join all lines with a newline character.
-
-Document content:
-${textContent.slice(0, 20000)}` }
+        { role: "user",   content: `Extract all Room Data Sheet fields, especially "roomFunction" which is typically at the top:\n\n${textContent.slice(0, 12000)}` }
       ]
     });
 
