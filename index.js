@@ -30,11 +30,15 @@ const app = express();
 
 // ─── MIDDLEWARE ───────────────────────────────────────────
 app.use(cors({
-  origin: [
-    "http://localhost:3000",
-    "https://rds-frontend-iweakmdr2-sujaychoukhande-06s-projects.vercel.app",
-    "https://rds-frontend-eosin.vercel.app"
-  ],
+  origin: (origin, callback) => {
+    // Allow: localhost, any *.vercel.app subdomain, Render itself
+    const allowed = !origin
+      || origin.startsWith("http://localhost")
+      || origin.endsWith(".vercel.app")
+      || origin.endsWith(".onrender.com");
+    if (allowed) callback(null, true);
+    else callback(new Error("Not allowed by CORS"));
+  },
   methods: ["GET", "POST", "PUT", "DELETE"],
   allowedHeaders: ["Content-Type"]
 }));
