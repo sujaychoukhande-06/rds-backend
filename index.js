@@ -364,68 +364,59 @@ if (imagePath && fs.existsSync(imagePath)) {
 function buildExcel(rows) {
   const wb = XLSX.utils.book_new();
 
-  // All field keys in section order
-  const ALL_KEYS = SECTIONS.flatMap(s => s.keys);
-
-  // ── Sheet 1: Master Summary (ALL fields as columns) ──
-  const metaCols = ["Room Code","Room Name","Department","Project","Status","Created"];
-  const dataCols = ALL_KEYS.map(k => toLabel(k));
-  const header   = [...metaCols, ...dataCols];
-
-  const dataRows = rows.map(r => {
+  // Sheet 1 — Master Summary
+  const sh = ["Room Code","Room Name","Department","Project","Location",
+               "Typology","Criticality","Infection Risk","Net Area (m²)",
+               "Patient Capacity","Staff Required","Op. Hours","Status","Created"];
+  const sr = rows.map(r => {
     const d = r.data || {};
-    const meta = [
-      r.roomCode || "",
-      d.roomName  || r.roomName  || "",
-      d.department|| r.department|| "",
-      d.project   || r.project   || "",
-      r.status    || "",
-      r.createdAt ? new Date(r.createdAt).toLocaleDateString("en-IN") : ""
-    ];
-    const vals = ALL_KEYS.map(k => {
-      const v = d[k];
-      return (v !== null && v !== undefined) ? String(v) : "";
-    });
-    return [...meta, ...vals];
+    return [r.roomCode,r.roomName,r.department,r.project,
+            d.location,d.roomTypology,d.criticalityLevel,d.infectionRiskCategory,
+            d.netArea,d.patientCapacity,d.staffRequirement,d.operationalHours,
+            r.status,r.createdAt ? new Date(r.createdAt).toLocaleDateString("en-IN") : ""];
   });
-
-  const sumWs = XLSX.utils.aoa_to_sheet([header, ...dataRows]);
-  sumWs["!cols"] = header.map(h => ({ wch: Math.max(h.length + 2, 14) }));
-  // Freeze top row
-  sumWs["!freeze"] = { xSplit: 0, ySplit: 1 };
+  const sumWs = XLSX.utils.aoa_to_sheet([sh,...sr]);
+  sumWs["!cols"] = sh.map((_,i) => ({ wch:[12,22,20,20,20,14,13,14,12,14,12,18,10,18][i]||14 }));
   XLSX.utils.book_append_sheet(wb, sumWs, "Master Summary");
 
-  // ── Sheet per room (section-grouped, Field | Value format) ──
-  rows.forEach(r => {
-    const d  = r.data || {};
-    const nm = `${(r.roomCode||"ROOM").replace(/[^a-zA-Z0-9]/g,"").slice(0,10)}_${String(r.id).slice(-4)}`.slice(0,31);
-    const aoa = [];
-    aoa.push(["ROOM DATA SHEET", "", "Medical College — Facility Planning", ""]);
-    aoa.push(["Room Code:",  r.roomCode   || "", "Room Name:",  d.roomName   || r.roomName   || ""]);
-    aoa.push(["Department:", d.department || "", "Project:",    d.project    || r.project    || ""]);
-    aoa.push(["Status:",     r.status     || "", "Created:",    r.createdAt ? new Date(r.createdAt).toLocaleDateString("en-IN") : ""]);
-    aoa.push([]);
+  // Sheet 2 — Full Flat
+  const allKeys = new Set();
+  rows.forEach(r => Object.keys(r.data||{}).forEach(k => allKeys.add(k)));
+  const dk = [...allKeys];
+  const fh = ["ID","Room Code","Room Name","Department","Project","Status","Created",...dk];
+  const fr = rows.map(r => {
+    const d = r.data||{};
+    return [r.id,r.roomCode,r.roomName,r.department,r.project,r.status,r.createdAt,...dk.map(k=>d[k]??"")];
+  });
+  const fullWs = XLSX.utils.aoa_to_sheet([fh,...fr]);
+  fullWs["!cols"] = fh.map(()=>({wch:18}));
+  XLSX.utils.book_append_sheet(wb, fullWs, "Full Data");
 
+  // Sheet per room
+  rows.forEach(r => {
+    const d   = r.data||{};
+    const nm  = `${(r.roomCode||"ROOM").replace(/[^a-zA-Z0-9]/g,"").slice(0,10)}_${String(r.id).slice(-4)}`.slice(0,31);
+    const aoa = [];
+    aoa.push(["ROOM DATA SHEET","","Medical College — Facility Planning",""]);
+    aoa.push(["Room Code:",r.roomCode||"","Room Name:",r.roomName||""]);
+    aoa.push(["Department:",r.department||"","Project:",r.project||""]);
+    aoa.push(["Status:",r.status||"","Created:",r.createdAt?new Date(r.createdAt).toLocaleDateString("en-IN"):""]);
+    aoa.push([]);
     SECTIONS.forEach(sec => {
-      aoa.push([sec.label, "", "", ""]);
-      aoa.push(["Field", "Value", "", ""]);
-      let any = false;
+      aoa.push([sec.label,"",""]);
+      aoa.push(["Field","Value"]);
+      let any=false;
       sec.keys.forEach(k => {
-        const v = d[k];
-        if (v !== null && v !== undefined && String(v).trim() !== "") {
-          aoa.push([toLabel(k), String(v), "", ""]);
-          any = true;
-        }
+        const v=d[k];
+        if(v!=null && v!==""){aoa.push([toLabel(k),String(v)]);any=true;}
       });
-      if (!any) aoa.push(["(No data entered)", "", "", ""]);
+      if(!any) aoa.push(["(No data entered)","",""]);
       aoa.push([]);
     });
-
     const ws = XLSX.utils.aoa_to_sheet(aoa);
-    ws["!cols"] = [{ wch:34 }, { wch:56 }, { wch:20 }, { wch:20 }];
-    XLSX.utils.book_append_sheet(wb, ws, nm);
+    ws["!cols"]=[{wch:34},{wch:56},{wch:20},{wch:20}];
+    XLSX.utils.book_append_sheet(wb,ws,nm);
   });
-
   return wb;
 }
 
@@ -881,10 +872,10 @@ app.post("/extract", async (req, res) => {
     }
 
     const completion = await groq.chat.completions.create({
-      model: "llama-3.3-70b-versatile", max_tokens: 1500, temperature: 0,
+      model: "llama-3.3-70b-versatile", max_tokens: 4000, temperature: 0,
       messages: [
         { role: "system", content: SYSTEM_PROMPT },
-        { role: "user",   content: `Extract all Room Data Sheet fields, especially "roomFunction" which is typically at the top:\n\n${textContent.slice(0, 12000)}` }
+        { role: "user",   content: `Extract all Room Data Sheet fields, especially "roomFunction" which is typically at the top:\n\n${textContent.slice(0, 28000)}` }
       ]
     });
 
