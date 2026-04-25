@@ -832,11 +832,39 @@ app.post("/extract", async (req, res) => {
     } else if (type === "word") {
       try {
         const buf = Buffer.from(content, "base64");
-        // Extract text with mammoth
-        const result = await mammoth.extractRawText({ buffer: buf });
-        textContent = result.value || "";
-        console.log(`Word extracted: ${textContent.length} chars`);
-        // Extract first image from docx (zip)
+
+        // Use convertToHtml to preserve table structure, then extract clean text
+        const htmlResult = await mammoth.convertToHtml({ buffer: buf });
+        const html = htmlResult.value || "";
+
+        // Convert HTML tables to readable key:value text
+        textContent = html
+          // Table rows → lines
+          .replace(/<tr[^>]*>/gi, "\n")
+          .replace(/<\/tr>/gi, "")
+          // Table cells → tab separated
+          .replace(/<td[^>]*>/gi, " | ")
+          .replace(/<\/td>/gi, "")
+          .replace(/<th[^>]*>/gi, " | ")
+          .replace(/<\/th>/gi, "")
+          // Headings
+          .replace(/<h[1-6][^>]*>/gi, "\n## ")
+          .replace(/<\/h[1-6]>/gi, "\n")
+          // Paragraphs and line breaks
+          .replace(/<p[^>]*>/gi, "\n")
+          .replace(/<\/p>/gi, "")
+          .replace(/<br\s*\/?>/gi, "\n")
+          // Strip remaining tags
+          .replace(/<[^>]+>/g, "")
+          // Decode HTML entities
+          .replace(/&amp;/g, "&").replace(/&lt;/g, "<").replace(/&gt;/g, ">")
+          .replace(/&nbsp;/g, " ").replace(/&#\d+;/g, " ")
+          // Clean up excessive whitespace but keep newlines
+          .replace(/[ \t]{2,}/g, " ")
+          .replace(/\n{3,}/g, "\n\n")
+          .trim();
+
+        console.log(`Word extracted (with tables): ${textContent.length} chars`);
         imageBase64 = extractRoomImageFromZip(buf);
         if (imageBase64) console.log("Word image extracted");
       } catch(e) {
@@ -875,7 +903,20 @@ app.post("/extract", async (req, res) => {
       model: "llama-3.3-70b-versatile", max_tokens: 4000, temperature: 0,
       messages: [
         { role: "system", content: SYSTEM_PROMPT },
-        { role: "user",   content: `Extract all Room Data Sheet fields, especially "roomFunction" which is typically at the top:\n\n${textContent.slice(0, 28000)}` }
+        { role: "user",   content: `Extract all Room Data Sheet fields from this document. Important instructions:
+
+1. "roomFunction" field: Extract ALL bullet points from the room function/description section at the top. Join them with semicolons into one string. Do not truncate.
+
+2. "additionalFF" field: Extract ALL items from "Fittings and Furniture (FF)" table as: "ItemCode: Description x Quantity" joined with semicolons. Example: "FF 150: Air flowmeter x1; FF 1465: Bracket: suction bottle x1; Curtain Track System x1 set"
+
+3. "additionalFE" field: Extract ALL items from "Fixtures, Equipment and associated Services (FE)" table as: "ItemCode: Description x Quantity" joined with semicolons. Example: "FE 31700: Light: examination ceiling x1; FE 36050: Monitor: cardiac x1"
+
+4. For other fields, use 80-90% confidence inference — if the document says "PACU" infer roomTypology as "Other", criticalityLevel as "High", etc.
+
+5. Extract numeric values as numbers (netArea, patientCapacity, etc.)
+
+Document content:
+${textContent.slice(0, 28000)}` }
       ]
     });
 
