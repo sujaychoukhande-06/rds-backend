@@ -124,15 +124,10 @@ function writeAll(rows) {
 
 // ─── USERS HELPER ─────────────────────────────────────────  ← NEW
 function readUsers() {
-  if (!fs.existsSync(USERS_FILE)) return [];
-  try {
-    const wb = XLSX.readFile(USERS_FILE);
-    const ws = wb.Sheets[wb.SheetNames[0]];
-    return XLSX.utils.sheet_to_json(ws);
-  } catch (e) {
-    console.error("readUsers error:", e.message);
-    return [];
-  }
+  return [
+    { id: "EMP001", name: "Rohan", email: "rohan@rds.med", password: "123",  role: "admin",    department: "administration" },
+    { id: "EMP002", name: "Ravi",  email: "ravi@rds.med",  password: "1234", role: "reviewer", department: "clinical"       },
+  ];
 }
 
 // ─── PDF BUILDER ─────────────────────────────────────────
