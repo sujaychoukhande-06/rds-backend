@@ -564,13 +564,26 @@ app.get("/filter-options", async (_req, res) => {
 
 // ─── EXCEL EXPORTS ────────────────────────────────────────
 
+// ── Save buffer to Supabase Storage ──────────────────────
+async function saveToStorage(buf, filename, mimetype) {
+  try {
+    const { error } = await supabase.storage
+      .from("rds-exports")
+      .upload(filename, buf, { contentType: mimetype, upsert: true });
+    if (error) console.warn("Storage upload warn:", error.message);
+    else console.log(`✓ Saved to Supabase Storage: ${filename}`);
+  } catch(e) { console.warn("Storage upload failed:", e.message); }
+}
+
 app.get("/export/excel", async (req, res) => {
   try {
     const rows = await readAll();
     if(!rows.length) return res.status(404).json({error:"No records found"});
+    const filename = `RDS_All_${new Date().toISOString().slice(0,10)}.xlsx`;
     const wb=buildExcel(rows), buf=XLSX.write(wb,{type:"buffer",bookType:"xlsx"});
+    saveToStorage(buf, filename, "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");
     res.setHeader("Content-Type","application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");
-    res.setHeader("Content-Disposition",`attachment; filename="RDS_All_${new Date().toISOString().slice(0,10)}.xlsx"`);
+    res.setHeader("Content-Disposition",`attachment; filename="${filename}"`);
     res.send(buf);
   } catch(e){console.error(e);res.status(500).json({error:"Excel failed: "+e.message});}
 });
@@ -580,9 +593,11 @@ app.get("/export/excel/:id", async (req, res) => {
     const all  = await readAll();
     const rows = all.filter(r=>String(r.id)===req.params.id);
     if(!rows.length) return res.status(404).json({error:"Record not found"});
+    const filename = `RDS_${rows[0].roomcode||rows[0].id}_${new Date().toISOString().slice(0,10)}.xlsx`;
     const wb=buildExcel(rows), buf=XLSX.write(wb,{type:"buffer",bookType:"xlsx"});
+    saveToStorage(buf, filename, "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");
     res.setHeader("Content-Type","application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");
-    res.setHeader("Content-Disposition",`attachment; filename="RDS_${rows[0].roomcode||rows[0].id}.xlsx"`);
+    res.setHeader("Content-Disposition",`attachment; filename="${filename}"`);
     res.send(buf);
   } catch(e){console.error(e);res.status(500).json({error:"Excel failed: "+e.message});}
 });
