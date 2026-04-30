@@ -486,16 +486,17 @@ app.post("/save", async (req, res) => {
     }
 
     const newRow = {
-      id:          String(now),
-      roomcode:    roomCode,
-      roomname:    newData.roomName   || newData.data?.roomName   || "",
-      department:  newData.department || newData.data?.department || "",
-      project:     newData.project    || newData.data?.project    || "",
-      createdat:   new Date().toISOString(),
-      updatedat:   new Date().toISOString(),
-      submittedby: newData._submittedBy || "system",
-      status:      "submitted",
-      data:        JSON.stringify(newData)
+      id:           String(now),
+      roomcode:     roomCode,
+      roomname:     newData.roomName   || newData.data?.roomName   || "",
+      department:   newData.department || newData.data?.department || "",
+      project:      newData.project    || newData.data?.project    || "",
+      createdat:    new Date().toISOString(),
+      updatedat:    new Date().toISOString(),
+      submittedby:  newData._submittedBy || "system",
+      lasteditedby: newData._submittedBy || "system",
+      status:       "submitted",
+      data:         JSON.stringify(newData)
     };
 
     const { data: saved, error } = await supabase.from("rds_rooms").insert(newRow).select().single();
@@ -513,10 +514,11 @@ app.post("/save", async (req, res) => {
 app.put("/data/:id", async (req, res) => {
   try {
     const updates = {
-      roomname:   req.body.roomName   || "",
-      department: req.body.department || "",
-      updatedat:  new Date().toISOString(),
-      data:       JSON.stringify(req.body)
+      roomname:     req.body.roomName   || "",
+      department:   req.body.department || "",
+      updatedat:    new Date().toISOString(),
+      lasteditedby: req.body._editedBy || req.body._submittedBy || "system",
+      data:         JSON.stringify(req.body)
     };
     const { data, error } = await supabase.from("rds_rooms").update(updates).eq("id", req.params.id).select().single();
     if (error) throw error;
